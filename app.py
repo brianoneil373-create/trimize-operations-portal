@@ -9,36 +9,37 @@ st.set_page_config(page_title="Trimize Operations Portal", layout="wide")
 
 # --- SUPABASE SETUP ---
 @st.cache_resource
-def init_supabase() -> Client:
-    # Uses Streamlit secrets for credentials
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+def init_supabase():
+    """Safely initialize Supabase client using secrets."""
+    try:
+        url = st.secrets["SUPABASE_URL"].strip().rstrip("/")
+        key = st.secrets["SUPABASE_KEY"].strip()
+        return create_client(url, key)
+    except Exception as e:
+        return None
 
-try:
-    supabase = init_supabase()
-except Exception as e:
-    st.sidebar.error("Database connection missing. Configure Streamlit secrets.")
+supabase = init_supabase()
 
 # --- HELPER FUNCTIONS ---
 def get_bundle_recipes():
     """Fetch bundle recipes from Supabase, or fall back to default hardcoded recipes if DB fails."""
-    try:
-        response = supabase.table("bundle_recipes").select("*").execute()
-        if response.data:
-            recipes = {}
-            for row in response.data:
-                bundle = row["bundle_name"]
-                if bundle not in recipes:
-                    recipes[bundle] = []
-                recipes[bundle].append({
-                    "component": row["component_name"],
-                    "qty": row["quantity"]
-                })
-            return recipes
-    except Exception as e:
-        st.warning("⚠️ Could not load recipes from database. Using default fallback recipes.")
-    
+    if supabase:
+        try:
+            response = supabase.table("bundle_recipes").select("*").execute()
+            if response.data:
+                recipes = {}
+                for row in response.data:
+                    bundle = row["bundle_name"]
+                    if bundle not in recipes:
+                        recipes[bundle] = []
+                    recipes[bundle].append({
+                        "component": row["component_name"],
+                        "qty": row["quantity"]
+                    })
+                return recipes
+        except Exception as e:
+            st.warning("⚠️ Could not load recipes from database. Using default fallback recipes.")
+
     # Fallback default dictionary
     return {
         'The Ultimate Grooming Bundle - أسود': [
@@ -89,8 +90,10 @@ def explode_shopify_orders(df, recipes):
                 
                 # Blank out financial totals on secondary component rows to avoid double counting
                 if not first:
-                    new_row["Subtotal"] = 0
-                    new_row["Total"] = 0
+                    if "Subtotal" in new_row:
+                        new_row["Subtotal"] = 0
+                    if "Total" in new_row:
+                        new_row["Total"] = 0
                 first = False
                 exploded_rows.append(new_row)
         else:
@@ -153,35 +156,47 @@ with tab1:
         
     if shopify_file and tag_file:
         if st.button("🚀 Explode Bundles & Merge Airway Bills"):
-            # 1. Read and explode Shopify Export
-            raw_shopify = pd.read_excel(shopify_file)
-            recipes = get_bundle_recipes()
-            exploded_df = explode_shopify_orders(raw_shopify, recipes)
-            
-            # 2. Extract PDF Tag data
-            pdf_df = parse_bosta_pdf(tag_file)
-            
-            # 3. Merge Shopify data with PDF Tracking Number via Order ID
-            merged_df = pd.merge(
-                exploded_df, 
-                pdf_df, 
-                left_on="Name", 
-                right_on="Order Reference", 
-                how="left"
-            )
-            
-            st.success("Successfully processed and merged order records!")
-            st.dataframe(merged_df, use_container_width=True)
-            
-            # Download exploded file
-            csv_buffer = io.BytesIO()
-            merged_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
-            st.download_button(
-                label="📥 Download Merged CSV",
-                data=csv_buffer.getvalue(),
-                file_name="processed_shipments.csv",
-                mime="text/csv"
-            )
+            try:
+                # 1. Read and explode Shopify Export
+                raw_shopify = pd.read_excel(shopify_file)
+                recipes = get_bundle_recipes()
+                exploded_df = explode_shopify_orders(raw_shopify, recipes)
+                
+                # 2. Extract PDF Tag data
+                pdf_df = parse_bosta_pdf(tag_file)
+                
+                # 3. Clean and explicitly type-cast join keys to string to prevent merge type errors
+                if "Name" not in exploded_df.columns:
+                    st.error("Error: Could not find 'Name' column in Shopify Excel file.")
+                elif "Order Reference" not in pdf_df.columns:
+                    st.error("Error: Could not extract 'Order Reference' from PDF airway bills.")
+                else:
+                    exploded_df["Name_Join"] = exploded_df["Name"].astype(str).str.strip()
+                    pdf_df["Order_Ref_Join"] = pdf_df["Order Reference"].astype(str).str.strip()
+                    
+                    # 4. Merge Shopify data with PDF Tracking Number
+                    merged_df = pd.merge(
+                        exploded_df, 
+                        pdf_df, 
+                        left_on="Name_Join", 
+                        right_on="Order_Ref_Join", 
+                        how="left"
+                    ).drop(columns=["Name_Join", "Order_Ref_Join"])
+                    
+                    st.success("Successfully processed and merged order records!")
+                    st.dataframe(merged_df, use_container_width=True)
+                    
+                    # Download exploded file
+                    csv_buffer = io.BytesIO()
+                    merged_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="📥 Download Merged CSV",
+                        data=csv_buffer.getvalue(),
+                        file_name="processed_shipments.csv",
+                        mime="text/csv"
+                    )
+            except Exception as err:
+                st.error(f"Processing Error: {str(err)}")
 
 # TAB 2: WAREHOUSE LOG
 with tab2:
