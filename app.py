@@ -102,30 +102,32 @@ def explode_shopify_orders(df, recipes):
     return pd.DataFrame(exploded_rows)
 
 def parse_bosta_pdf(pdf_file):
-    """Extract Order Reference, Tracking Number, and COD Amount from Bosta Airway Bills."""
+    """Exact parsing logic from Tag revise.txt."""
     reader = pypdf.PdfReader(pdf_file)
     records = []
     
     for idx, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
         
-        # Order Reference (Handles English & Arabic labels, strips '#' prefix)
+        # 1. Order Reference
         order_ref = None
-        ref_match = re.search(r'(?:Order\s*Ref(?:erence)?|رقم\s*الطلب)\s*[:#-]?\s*#?(\w+)', text, re.IGNORECASE)
+        ref_match = re.search(r'Order Reference:\s*(\S+)', text)
         if ref_match:
-            order_ref = ref_match.group(1).replace("#", "").strip()
+            order_ref = ref_match.group(1)
 
-        # Tracking Number
+        # 2. Tracking Number
         tracking_num = None
-        track_match = re.search(r'(?:Tracking\s*Number|رقم\s*الشحنة)\s*[:#-]?\s*(\d+)', text, re.IGNORECASE)
+        track_match = re.search(r'Tracking Number\s*(\d+)', text)
         if track_match:
             tracking_num = track_match.group(1)
 
-        # COD / Collection Amount
-        cod_amount = 0.0
-        cod_match = re.search(r'(?:مبلغ\s*التحصيل|ج\.م|EGP|COD)\s*[:#-]?\s*([\d,]+(?:\.\d+)?)', text)
+        # 3. COD / Collection Amount
+        cod_amount = "0"
+        cod_match = re.search(r'مبلغ التحصيل:\s*([\d,]+(?:\.\d+)?)', text)
+        if not cod_match:
+            cod_match = re.search(r'ج\.م\s*([\d,]+(?:\.\d+)?)', text)
         if cod_match:
-            cod_amount = float(cod_match.group(1).replace(',', ''))
+            cod_amount = cod_match.group(1).replace(',', '')
 
         records.append({
             "Page": idx,
@@ -135,6 +137,13 @@ def parse_bosta_pdf(pdf_file):
         })
 
     return pd.DataFrame(records)
+
+def extract_order_num(val):
+    """Extract digits to match '#120166', '120166', or '#120166.1' seamlessly."""
+    if pd.isna(val):
+        return ""
+    match = re.search(r'\d+', str(val))
+    return match.group(0) if match else ""
 
 # --- NAVIGATION & INTERFACE ---
 st.title("📦 Trimize Operations Portal")
@@ -163,38 +172,28 @@ with tab1:
                 # 2. Extract PDF Tag data
                 pdf_df = parse_bosta_pdf(tag_file)
                 
-                # 3. Clean and strip '#' from join keys on both sides
+                # 3. Check for missing columns
                 if "Name" not in exploded_df.columns:
                     st.error("Error: Could not find 'Name' column in Shopify Excel file.")
                 elif "Order Reference" not in pdf_df.columns:
                     st.error("Error: Could not extract 'Order Reference' from PDF airway bills.")
                 else:
-                    exploded_df["Name_Join"] = (
-                        exploded_df["Name"]
-                        .astype(str)
-                        .str.replace("#", "", regex=False)
-                        .str.strip()
-                    )
-                    pdf_df["Order_Ref_Join"] = (
-                        pdf_df["Order Reference"]
-                        .astype(str)
-                        .str.replace("#", "", regex=False)
-                        .str.strip()
-                    )
+                    # 4. Normalize join keys by extracting digits (e.g. #120166.1 -> 120166)
+                    exploded_df["join_key"] = exploded_df["Name"].apply(extract_order_num)
+                    pdf_df["join_key"] = pdf_df["Order Reference"].apply(extract_order_num)
                     
-                    # 4. Merge Shopify data with PDF Tracking Number
+                    # 5. Merge Shopify data with PDF Tracking Number
                     merged_df = pd.merge(
                         exploded_df, 
                         pdf_df, 
-                        left_on="Name_Join", 
-                        right_on="Order_Ref_Join", 
+                        on="join_key", 
                         how="left"
-                    ).drop(columns=["Name_Join", "Order_Ref_Join"])
+                    ).drop(columns=["join_key"])
                     
                     st.success("Successfully processed and merged order records!")
                     st.dataframe(merged_df, use_container_width=True)
                     
-                    # Download exploded file
+                    # Download merged CSV
                     csv_buffer = io.BytesIO()
                     merged_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
                     st.download_button(
