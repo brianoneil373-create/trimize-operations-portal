@@ -22,18 +22,53 @@ except Exception as e:
 
 # --- HELPER FUNCTIONS ---
 def get_bundle_recipes():
-    """Fetch bundle recipes directly from Supabase database."""
-    response = supabase.table("bundle_recipes").select("*").execute()
-    recipes = {}
-    for row in response.data:
-        bundle = row["bundle_name"]
-        if bundle not in recipes:
-            recipes[bundle] = []
-        recipes[bundle].append({
-            "component": row["component_name"],
-            "qty": row["quantity"]
-        })
-    return recipes
+    """Fetch bundle recipes from Supabase, or fall back to default hardcoded recipes if DB fails."""
+    try:
+        response = supabase.table("bundle_recipes").select("*").execute()
+        if response.data:
+            recipes = {}
+            for row in response.data:
+                bundle = row["bundle_name"]
+                if bundle not in recipes:
+                    recipes[bundle] = []
+                recipes[bundle].append({
+                    "component": row["component_name"],
+                    "qty": row["quantity"]
+                })
+            return recipes
+    except Exception as e:
+        st.warning("⚠️ Could not load recipes from database. Using default fallback recipes.")
+    
+    # Fallback default dictionary
+    return {
+        'The Ultimate Grooming Bundle - أسود': [
+            {'component': 'ماكينة حلاقة تريمايز للرجال - أسود', 'qty': 1},
+            {'component': 'تريمايز جل الاستحمام', 'qty': 1},
+            {'component': 'مزيل رائحة العرق من تريمايز', 'qty': 1},
+            {'component': 'تريمايز غسول المناطق الحساسة', 'qty': 1}
+        ],
+        'The Ultimate Grooming Bundle - أزرق': [
+            {'component': 'ماكينة حلاقة تريمايز للرجال - أزرق', 'qty': 1},
+            {'component': 'تريمايز جل الاستحمام', 'qty': 1},
+            {'component': 'مزيل رائحة العرق من تريمايز', 'qty': 1},
+            {'component': 'تريمايز غسول المناطق الحساسة', 'qty': 1}
+        ],
+        'The Ultimate Grooming Bundle - أخضر': [
+            {'component': 'ماكينة حلاقة تريمايز للرجال - أخضر', 'qty': 1},
+            {'component': 'تريمايز جل الاستحمام', 'qty': 1},
+            {'component': 'مزيل رائحة العرق من تريمايز', 'qty': 1},
+            {'component': 'تريمايز غسول المناطق الحساسة', 'qty': 1}
+        ],
+        'The Full Routine Bundle': [
+            {'component': 'تريمايز جل الاستحمام', 'qty': 1},
+            {'component': 'مزيل رائحة العرق من تريمايز', 'qty': 1},
+            {'component': 'تريمايز غسول المناطق الحساسة', 'qty': 1}
+        ],
+        'Intimate Bundle': [
+            {'component': 'مزيل رائحة العرق من تريمايز', 'qty': 1},
+            {'component': 'تريمايز غسول المناطق الحساسة', 'qty': 1}
+        ]
+    }
 
 def explode_shopify_orders(df, recipes):
     """Explode bundle items into individual SKU rows while keeping original metadata."""
