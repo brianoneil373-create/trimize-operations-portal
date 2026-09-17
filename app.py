@@ -109,23 +109,21 @@ def parse_bosta_pdf(pdf_file):
     for idx, page in enumerate(reader.pages, start=1):
         text = page.extract_text() or ""
         
-        # Order Reference
+        # Order Reference (Handles English & Arabic labels, strips '#' prefix)
         order_ref = None
-        ref_match = re.search(r'Order Reference:\s*(\S+)', text)
+        ref_match = re.search(r'(?:Order\s*Ref(?:erence)?|رقم\s*الطلب)\s*[:#-]?\s*#?(\w+)', text, re.IGNORECASE)
         if ref_match:
-            order_ref = ref_match.group(1)
+            order_ref = ref_match.group(1).replace("#", "").strip()
 
         # Tracking Number
         tracking_num = None
-        track_match = re.search(r'Tracking Number\s*(\d+)', text)
+        track_match = re.search(r'(?:Tracking\s*Number|رقم\s*الشحنة)\s*[:#-]?\s*(\d+)', text, re.IGNORECASE)
         if track_match:
             tracking_num = track_match.group(1)
 
         # COD / Collection Amount
         cod_amount = 0.0
-        cod_match = re.search(r'مبلغ التحصيل:\s*([\d,]+(?:\.\d+)?)', text)
-        if not cod_match:
-            cod_match = re.search(r'ج\.م\s*([\d,]+(?:\.\d+)?)', text)
+        cod_match = re.search(r'(?:مبلغ\s*التحصيل|ج\.م|EGP|COD)\s*[:#-]?\s*([\d,]+(?:\.\d+)?)', text)
         if cod_match:
             cod_amount = float(cod_match.group(1).replace(',', ''))
 
@@ -165,14 +163,24 @@ with tab1:
                 # 2. Extract PDF Tag data
                 pdf_df = parse_bosta_pdf(tag_file)
                 
-                # 3. Clean and explicitly type-cast join keys to string to prevent merge type errors
+                # 3. Clean and strip '#' from join keys on both sides
                 if "Name" not in exploded_df.columns:
                     st.error("Error: Could not find 'Name' column in Shopify Excel file.")
                 elif "Order Reference" not in pdf_df.columns:
                     st.error("Error: Could not extract 'Order Reference' from PDF airway bills.")
                 else:
-                    exploded_df["Name_Join"] = exploded_df["Name"].astype(str).str.strip()
-                    pdf_df["Order_Ref_Join"] = pdf_df["Order Reference"].astype(str).str.strip()
+                    exploded_df["Name_Join"] = (
+                        exploded_df["Name"]
+                        .astype(str)
+                        .str.replace("#", "", regex=False)
+                        .str.strip()
+                    )
+                    pdf_df["Order_Ref_Join"] = (
+                        pdf_df["Order Reference"]
+                        .astype(str)
+                        .str.replace("#", "", regex=False)
+                        .str.strip()
+                    )
                     
                     # 4. Merge Shopify data with PDF Tracking Number
                     merged_df = pd.merge(
